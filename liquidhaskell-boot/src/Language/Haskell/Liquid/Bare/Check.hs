@@ -43,6 +43,8 @@ import qualified Language.Haskell.Liquid.Measure           as Ms
 import qualified Language.Haskell.Liquid.Bare.Types        as Bare
 import qualified Language.Haskell.Liquid.Bare.Resolve      as Bare
 
+import Debug.Trace (trace)
+
 ----------------------------------------------------------------------------------------------
 -- | Checking TargetSrc ------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------
@@ -547,10 +549,11 @@ checkMismatch (x, t) = if ok then emptyDiagnostics else mkDiagnostics mempty [er
 tyCompat :: Var -> RType RTyCon RTyVar r -> Bool
 tyCompat x t         = lqT == hsT
   where
-    lqT :: RSort     = toRSort (eraseQuotTyCon t)
+    lqT :: RSort     = elimQuotTyConsInSort $ toRSort t
     hsT :: RSort     = ofType (varType x)
     _msg             = "TY-COMPAT: " ++ GM.showPpr x ++ ": hs = " ++ F.showpp hsT ++ " :lq = " ++ F.showpp lqT
 
+{-
     eraseQuotTyCon :: RType RTyCon RTyVar r -> RSort
     eraseQuotTyCon (RVar v _) = RVar v ()
     eraseQuotTyCon (RFun b inf i o _)
@@ -561,7 +564,8 @@ tyCompat x t         = lqT == hsT
       = RAllP (eraseQuotTyCon <$> pvb) (eraseQuotTyCon ty)
     eraseQuotTyCon (RApp (RQTyCon _ ut _ vs _) ts _ _)
       = let subs = zip vs (map eraseQuotTyCon ts)
-         in foldr subsTyVarMeet' (eraseQuotTyCon ut) subs
+         in trace (show subs) $ subst subs $ eraseQuotTyCon ut
+         -- foldr subsTyVarMeet' (eraseQuotTyCon ut) subs
     eraseQuotTyCon (RApp tc as ps _)
       = RApp tc (map eraseQuotTyCon as) (map (eraseQuotTyCon <$>) ps) ()
     eraseQuotTyCon (RAllE s aa ty)
@@ -574,6 +578,9 @@ tyCompat x t         = lqT == hsT
     eraseQuotTyCon (RRTy env _ obl ty)
       = RRTy (map (\(s, u) -> (s, eraseQuotTyCon u)) env) () obl (eraseQuotTyCon ty)
     eraseQuotTyCon (RHole _) = RHole ()
+    
+    subst [] u = u
+    subst ((a,t'):su) u = subsTyVarMeet' (a, t') (subst su u)-}
 
 errTypeMismatch     :: Var -> Located SpecType -> Error
 errTypeMismatch x t = ErrMismatch lqSp (pprint x) (text "Checked") d1 d2 Nothing hsSp

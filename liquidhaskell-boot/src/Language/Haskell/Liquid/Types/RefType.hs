@@ -90,16 +90,19 @@ module Language.Haskell.Liquid.Types.RefType (
   , tyVarsPosition, Positions(..)
 
   , isNumeric
+  
 
   -- Quotient utility functions
-  , appQTyCon
-  , eraseQuotientTyCons
+  , appQuotTyCon
+  , elimQuotTyCons
+  , elimQuotTyConsInSort
 
   ) where
 
 -- import           GHC.Stack
 import Prelude hiding (error)
 -- import qualified Prelude
+import           Data.Bifunctor           (second)
 import           Data.Maybe               (fromMaybe, isJust)
 import           Data.Monoid              (First(..))
 import           Data.Hashable
@@ -139,8 +142,6 @@ import           Liquid.GHC.API        as Ghc hiding ( Expr
                                                                       )
 import           Liquid.GHC.TypeRep () -- Eq Type instance
 import Data.List (foldl')
-
-
 
 
 
@@ -448,19 +449,6 @@ eqRSort _ _ _
 --------------------------------------------------------------------------------
 -- | Wrappers for GHC Type Elements --------------------------------------------
 --------------------------------------------------------------------------------
-
-instance Eq RTyVar where
-  -- FIXME: need to compare unique and string because we reuse
-  -- uniques in stringTyVar and co.
-  RTV α == RTV α' = α == α' && getOccName α == getOccName α'
-
-instance Ord RTyVar where
-  compare (RTV α) (RTV α') = case compare α α' of
-    EQ -> compare (getOccName α) (getOccName α')
-    o  -> o
-
-instance Hashable RTyVar where
-  hashWithSalt i (RTV α) = hashWithSalt i α
 
 -- TyCon isn't comparable
 --instance Ord RTyCon where
@@ -1885,9 +1873,6 @@ mkTyConInfo c userTv userPv f = TyConInfo tcTv userPv f
 -- | Printing Refinement Types -------------------------------------------------
 --------------------------------------------------------------------------------
 
-instance Show RTyVar where
-  show = showpp
-
 instance PPrint (UReft r) => Show (UReft r) where
   show = showpp
 
@@ -1990,61 +1975,70 @@ instance Semigroup (Positions a) where
   (Pos x1 x2 x3) <> (Pos y1 y2 y3) = Pos (x1 ++ y1) (x2 ++ y2) (x3 ++ y3)
 
 --------------------------------------------------------------------------------
--- Quotient utility functions
+-- Quotient Utility functions
 --------------------------------------------------------------------------------
+appQuotTyCon :: SpecType -> [RTyVar] -> [SpecType] -> SpecType
+appQuotTyCon ut vs ts = substQuotElim (M.fromList $ zip vs ts) ut
 
-eraseQuotientTyCons' :: RSort -> RSort
-eraseQuotientTyCons' (RVar v _) = RVar v ()
-eraseQuotientTyCons' (RFun b inf i o _)
-  = RFun b inf (eraseQuotientTyCons' i) (eraseQuotientTyCons' o) ()
-eraseQuotientTyCons' (RAllT tvb ty _)
-  = RAllT (eraseQuotientTyCons' <$> tvb) (eraseQuotientTyCons' ty) ()
-eraseQuotientTyCons' (RAllP pvb ty)
-  = RAllP (eraseQuotientTyCons' <$> pvb) (eraseQuotientTyCons' ty)
-eraseQuotientTyCons' (RApp (RQTyCon _ ut _ vs _) ts _ _)
-  = let subs = zip vs (map eraseQuotientTyCons' ts)
-     in foldr subsTyVarMeet' (void $ eraseQuotientTyCons ut) subs
-eraseQuotientTyCons' (RApp tc as ps _)
-  = RApp tc (map eraseQuotientTyCons' as) (map (eraseQuotientTyCons' <$>) ps) ()
-eraseQuotientTyCons' (RAllE s aa ty)
-  = RAllE s (eraseQuotientTyCons' aa) (eraseQuotientTyCons' ty)
-eraseQuotientTyCons' (REx s exa ty)
-  = REx s (eraseQuotientTyCons' exa) (eraseQuotientTyCons' ty)
-eraseQuotientTyCons' (RExprArg e) = RExprArg e
-eraseQuotientTyCons' (RAppTy a r _)
-  = RAppTy (eraseQuotientTyCons' a) (eraseQuotientTyCons' r) ()
-eraseQuotientTyCons' (RRTy env _ obl ty)
-  = RRTy (map (\(s, u) -> (s, eraseQuotientTyCons' u)) env)
-         () obl (eraseQuotientTyCons' ty)
-eraseQuotientTyCons' (RHole _) = RHole ()
+elimQuotTyCons :: SpecType -> SpecType
+elimQuotTyCons = substQuotElim mempty
 
-eraseQuotientTyCons :: SpecType -> SpecType
-eraseQuotientTyCons (RVar v r) = RVar v r
-eraseQuotientTyCons (RFun b inf i o r)
-  = RFun b inf (eraseQuotientTyCons i) (eraseQuotientTyCons o) r
-eraseQuotientTyCons (RAllT tvb ty r)
-  = RAllT (eraseQuotientTyCons' <$> tvb) (eraseQuotientTyCons ty) r
-eraseQuotientTyCons (RAllP pvb ty)
-  = RAllP (eraseQuotientTyCons' <$> pvb) (eraseQuotientTyCons ty)
-eraseQuotientTyCons (RApp (RQTyCon _ ut _ vs _) ts _ _)
-  = appQTyCon ut vs ts
-eraseQuotientTyCons (RApp tc as ps r)
-  = RApp tc (map eraseQuotientTyCons as) (map (eraseQuotientTyCons <$>) ps) r
-eraseQuotientTyCons (RAllE s aa ty)
-  = RAllE s (eraseQuotientTyCons aa) (eraseQuotientTyCons ty)
-eraseQuotientTyCons (REx s exa ty)
-  = REx s (eraseQuotientTyCons exa) (eraseQuotientTyCons ty)
-eraseQuotientTyCons (RExprArg e) = RExprArg e
-eraseQuotientTyCons (RAppTy a r rt)
-  = RAppTy (eraseQuotientTyCons a) (eraseQuotientTyCons r) rt
-eraseQuotientTyCons (RRTy env rt obl ty)
-  = RRTy (map (\(s, u) -> (s, eraseQuotientTyCons u)) env) rt obl (eraseQuotientTyCons ty)
-eraseQuotientTyCons (RHole r) = RHole r
+elimQuotTyConsInSort :: RSort -> RSort
+elimQuotTyConsInSort = substQuotElim' mempty
 
-appQTyCon :: SpecType -> [RTyVar] -> [SpecType] -> SpecType
-appQTyCon ut vs ts
-  = let subs = zip vs (map eraseQuotientTyCons ts)
-     in foldr subsTyVarMeet' ut subs
-  
-  
-  -- F.subst (F.Su $ M.fromList $ zip (map F.symbol vs (map eraseQuotientTyCons ts)) ut
+substQuotElim :: M.HashMap RTyVar SpecType -> SpecType -> SpecType
+substQuotElim subs (RVar v r)
+  = case M.lookup v subs of
+      Nothing -> RVar v r
+      Just t  -> t
+substQuotElim subs (RFun b inf i o r)
+  = RFun b inf (substQuotElim subs i) (substQuotElim subs o) r
+substQuotElim subs (RAllT tvb ty r)
+  = let t' = substQuotElim (M.delete (ty_var_value tvb) subs) ty
+     in RAllT tvb t' r
+substQuotElim subs (RAllP pvb ty)
+  = RAllP (substQuotElim' (void <$> subs) <$> pvb) (substQuotElim subs ty)
+substQuotElim subs (RApp (RQTyCon _ ut _ vs _) ts _ _)
+  = let nsubs = foldr (uncurry M.insert) subs $ zip vs (map (substQuotElim subs) ts)
+     in substQuotElim nsubs ut
+substQuotElim subs (RApp tc as ps r)
+  = RApp tc (map (substQuotElim subs) as) (map (substQuotElim subs <$>) ps) r
+substQuotElim subs (RAllE s aa ty)
+  = RAllE s (substQuotElim subs aa) (substQuotElim subs ty)
+substQuotElim subs (REx s exa ty)
+  = REx s (substQuotElim subs exa) (substQuotElim subs ty)
+substQuotElim _ (RExprArg e) = RExprArg e
+substQuotElim subs (RAppTy a t r)
+  = RAppTy (substQuotElim subs a) (substQuotElim subs t) r
+substQuotElim subs (RRTy env r obl ty)
+  = RRTy (map (second (substQuotElim subs)) env) r obl (substQuotElim subs ty)
+substQuotElim _ (RHole r) = RHole r
+
+-- | Would need to parametrise RTyCon to prevent repetition
+substQuotElim' :: M.HashMap RTyVar RSort -> RSort -> RSort
+substQuotElim' subs (RVar v r)
+  = case M.lookup (F.tidySymbol $ F.symbol v) (M.mapKeys (F.tidySymbol . F.symbol) subs) of
+      Nothing -> RVar v r
+      Just t  -> t
+substQuotElim' subs (RFun b inf i o r)
+  = RFun b inf (substQuotElim' subs i) (substQuotElim' subs o) r
+substQuotElim' subs (RAllT tvb ty r)
+  = let t' = substQuotElim' (M.delete (ty_var_value tvb) subs) ty
+     in RAllT tvb t' r
+substQuotElim' subs (RAllP pvb ty)
+  = RAllP (substQuotElim' subs <$> pvb) (substQuotElim' subs ty)
+substQuotElim' subs (RApp (RQTyCon _ ut _ vs _) ts _ _)
+  = let nsubs = foldr (uncurry M.insert) subs $ zip vs (map (substQuotElim' subs) ts)
+     in substQuotElim' nsubs (void ut)
+substQuotElim' subs (RApp tc as ps r)
+  = RApp tc (map (substQuotElim' subs) as) (map (substQuotElim' subs <$>) ps) r
+substQuotElim' subs (RAllE s aa ty)
+  = RAllE s (substQuotElim' subs aa) (substQuotElim' subs ty)
+substQuotElim' subs (REx s exa ty)
+  = REx s (substQuotElim' subs exa) (substQuotElim' subs ty)
+substQuotElim' _ (RExprArg e) = RExprArg e
+substQuotElim' subs (RAppTy a t r)
+  = RAppTy (substQuotElim' subs a) (substQuotElim' subs t) r
+substQuotElim' subs (RRTy env r obl ty)
+  = RRTy (map (second (substQuotElim' subs)) env) r obl (substQuotElim' subs ty)
+substQuotElim' _ (RHole r) = RHole r

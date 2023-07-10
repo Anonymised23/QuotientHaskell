@@ -262,7 +262,11 @@ splitC _ (SubC γ t1 t2)
 splitC _ (SubR γ o r)
   = do ts     <- getTemplates
        let r1' = pruneUnsortedReft γ'' ts r1
-       return $ F.subC γ' r1' r2 Nothing tag ci
+       return
+        $ if F.reftPred rr == F.PTrue then
+            []
+          else
+            F.subC γ' r1' r2 Nothing tag ci
   where
     γ'' = feEnv $ fenv γ
     γ'  = feBinds $ fenv γ

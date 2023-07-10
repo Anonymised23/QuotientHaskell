@@ -1071,7 +1071,9 @@ bareQCApp env modname pos r (QuotTy name ty quots vs) ts
     variances = computeVariances utype $ M.fromList [ (tv, Invariant) | tv <- ftvs ]
   
     ftvs :: [RTyVar]
-    ftvs = map symbolRTyVar vs
+    ftvs 
+      = let tvs = ofBareType env modname pos Nothing . flip RVar mempty . BTV <$> vs
+         in [ tv | (RVar tv _) <- tvs ] -- map symbolRTyVar vs
 
     err :: Error
     err = ErrAliasApp (GM.sourcePosSrcSpan $ F.loc name)

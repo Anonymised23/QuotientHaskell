@@ -91,7 +91,7 @@ consAct :: CGEnv -> Config -> TargetInfo -> CG ()
 consAct γ cfg info = do
   let sSpc = gsSig . giSpec $ info
   let gSrc = giSrc info
-  when (gradual cfg) (mapM_ (addW . WfC γ . eraseQuotientTyCons . val . snd) (gsTySigs sSpc ++ gsAsmSigs sSpc))
+  when (gradual cfg) (mapM_ (addW . WfC γ . elimQuotTyCons . val . snd) (gsTySigs sSpc ++ gsAsmSigs sSpc))
   γ' <- foldM (consCBTop cfg info) γ (giCbs gSrc)
   -- Relational Checking: the following only runs when the list of relational specs is not empty
   (ψ, γ'') <- foldM (consAssmRel cfg info) ([], γ') (gsAsmRel sSpc ++ gsRelation sSpc)
@@ -630,8 +630,8 @@ cconsE' γ (Case e x τ cases) t
 
        case lookupREnv (F.symbol x) (renv γ') of
          Just (RApp (RQTyCon _ ut qs vs _) ts _ _) -> do
-           trace (show $ map (\(_, _, ex) -> ex) $ respectCases qs) $ forM_ (respectCases qs) $ \(u, q, bs) -> do
-            let baseT  = rTypeSort (emb γ) $ appQTyCon ut vs ts
+           forM_ (respectCases qs) $ \(u, q, bs) -> do
+            let baseT  = rTypeSort (emb γ) $ appQuotTyCon ut vs ts
                 vSub   = zip vs $ map (const () <$>) ts
             checkRespectability γ qCodomain (applyCase baseT) u (applySub vSub q) bs
          _                                       -> return ()
@@ -1765,7 +1765,7 @@ checkRespectability γ τ f u q e = coreExpr >>= \case
                     [] -> F.PAtom F.Eq left cexpr
                     rs -> F.POr (F.PAtom F.Eq left cexpr : rs)
 
-          trace (show expr) $ mkConstraint γ' expr ""
+          mkConstraint γ' expr ""
         Nothing -> return ()
 
     addPrecondition :: F.Expr -> F.Expr

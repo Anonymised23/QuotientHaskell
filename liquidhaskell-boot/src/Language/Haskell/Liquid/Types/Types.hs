@@ -312,7 +312,6 @@ import           Language.Haskell.Liquid.Misc
 import           Language.Haskell.Liquid.UX.Config
 import           Data.Default
 
-
 -----------------------------------------------------------------------------
 -- | Information about scope Binders Scope in
 -----------------------------------------------------------------------------
@@ -607,6 +606,22 @@ instance F.PPrint RelExpr where
 newtype BTyVar = BTV Symbol deriving (Show, Generic, Data, Typeable)
 
 newtype RTyVar = RTV TyVar deriving (Generic, Data, Typeable)
+
+instance Eq RTyVar where
+  -- FIXME: need to compare unique and string because we reuse
+  -- uniques in stringTyVar and co.
+  RTV α == RTV α' = α == α' && getOccName α == getOccName α'
+
+instance Ord RTyVar where
+  compare (RTV α) (RTV α') = case compare α α' of
+    EQ -> compare (getOccName α) (getOccName α')
+    o  -> o
+
+instance Hashable RTyVar where
+  hashWithSalt i (RTV α) = hashWithSalt i α
+
+instance Show RTyVar where
+  show = F.showpp
 
 instance Eq BTyVar where
   (BTV x) == (BTV y) = x == y
@@ -2588,8 +2603,6 @@ instance Eq ctor => Semigroup (MSpec ty ctor) where
 instance Eq ctor => Monoid (MSpec ty ctor) where
   mempty = MSpec M.empty M.empty M.empty []
   mappend = (<>)
-
-
 
 --------------------------------------------------------------------------------
 -- Nasty PP stuff

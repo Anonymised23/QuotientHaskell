@@ -1149,7 +1149,7 @@ specP
          >> ((reserved "measure"  >> fmap IMeas  iMeasureP )
          <|> (reserved "laws"     >> fmap ILaws instanceLawP)
          <|> fmap RInst  instanceP ))
-    {-<|> (reserved "respects" >> fmap QAsrt respectsP)-}
+    <|> (reserved "respects"      >> fmap QAsrt respectsP)
     <|> (reserved "import"        >> fmap Impt   symbolP   )
 
     <|> (reserved "data"
@@ -1585,7 +1585,6 @@ quotConP as = do
   l  <- quotPatternP <* reservedOp "=="
   QuotCtor x as bs l <$> exprP
 
-{-
 respectsP :: Parser RespectsSig
 respectsP = do
   func   <- reservedOp "<" *> lowerIdP
@@ -1593,7 +1592,7 @@ respectsP = do
   name   <- locLowerIdP
   binds  <- many (try quotConBindP <* reservedOp "->")
   (l, r) <- braces ((,) <$> exprP <* reservedOp "==" <*> exprP)
-  return $ RespectsSig name func qt binds l r-}
+  return $ RespectsSig name func qt binds l r
 
 dataConP :: [Symbol] -> Parser DataCtor
 dataConP as = do
