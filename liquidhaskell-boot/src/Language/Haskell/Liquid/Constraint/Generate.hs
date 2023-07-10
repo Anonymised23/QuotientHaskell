@@ -18,7 +18,7 @@
 --   and the code for syntax-directed constraint generation.
 
 module Language.Haskell.Liquid.Constraint.Generate ( generateConstraints, generateConstraintsWithEnv, caseEnv, consE ) where
-import Debug.Trace (trace)
+
 import           Prelude                                       hiding ()
 import           GHC.Stack
 import           Liquid.GHC.API                   as Ghc hiding ( panic
