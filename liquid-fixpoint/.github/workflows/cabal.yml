@@ -1,0 +1,60 @@
+name: cabal
+
+on:
+  push:
+  pull_request:
+
+# NOTE: The setup-z3 action constructs the download filename from
+# z3-version-architecture-distribution. From z3-4.8.10 to z3-4.8.11, the z3
+# releases distribution name for use on ubuntu changed from ubuntu to
+# glibc-2.31.  SEE: https://github.com/Z3Prover/z3/releases
+jobs:
+  build:
+    name: ghc-${{ matrix.ghc }} z3-${{ matrix.z3 }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cabal: ["3.6"]
+        ghc:
+          - "8.10.7"
+          - "9.2.3"
+        z3:
+          - "4.10.2"
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Setup z3-4.10.2
+        uses: pavpanchekha/setup-z3@6b2d476d7a9227e0d8d2b94f73cd9fcba91b5e98
+        with:
+          version: ${{ matrix.z3 }}
+
+      - name: Workaround runner image issue
+        # https://github.com/actions/runner-images/issues/7061
+        run: sudo chown -R $USER /usr/local/.ghcup
+
+      - name: Setup GHC and cabal-install
+        uses: haskell/actions/setup@v2
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: ${{ matrix.cabal }}
+
+      - name: Cache ~/.cabal/packages, ~/.cabal/store and dist-newstyle
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cabal/packages
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-${{ matrix.ghc }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
+
+      - name: Update package list
+        run: cabal update
+
+      - name: Build
+        run: cabal build all --enable-tests
+
+      - name: Test
+        run: cabal test all --test-show-details=direct --test-option="--color=always"

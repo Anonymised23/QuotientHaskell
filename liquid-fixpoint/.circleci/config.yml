@@ -1,0 +1,54 @@
+---
+version: 2.0
+
+jobs:
+  build:
+    machine:
+      image: ubuntu-2004:202107-02
+    steps:
+      - run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq curl git ssh unzip wget libtinfo-dev gcc make
+      - add_ssh_keys
+      - run: 
+          name: Install z3 
+          command: |
+            wget https://github.com/Z3Prover/z3/releases/download/z3-4.8.7/z3-4.8.7-x64-ubuntu-16.04.zip
+            unzip z3-4.8.7-x64-ubuntu-16.04.zip
+            rm -f z3-4.8.7-x64-ubuntu-16.04.zip
+            sudo cp z3-4.8.7-x64-ubuntu-16.04/bin/libz3.a /usr/local/lib
+            sudo cp z3-4.8.7-x64-ubuntu-16.04/bin/z3 /usr/local/bin
+            sudo cp z3-4.8.7-x64-ubuntu-16.04/include/* /usr/local/include
+            rm -rf z3-4.8.7-x64-ubuntu-16.04
+            z3 --version
+
+      - checkout
+      - restore_cache:
+          keys:
+            - stack-cache-v1-{{ checksum "stack.yaml" }}-{{ checksum "liquid-fixpoint.cabal" }}
+            - stack-cache-v1-{{ checksum "stack.yaml" }}
+      - run:
+          name: Dependencies
+          command: |
+            wget -qO- https://get.haskellstack.org/ | sudo sh
+            stack --no-terminal setup
+            stack --no-terminal build -j2 liquid-fixpoint --only-dependencies --test --no-run-tests
+      - save_cache:
+          key: stack-cache-v1-{{ checksum "stack.yaml" }}-{{ checksum "liquid-fixpoint.cabal" }}
+          paths:
+            - ~/.stack
+            - ./.stack-work
+      - run:
+          name: Compile
+          command : |
+            stack --no-terminal build -j2 liquid-fixpoint --flag liquid-fixpoint:devel --test --no-run-tests
+      - run:
+          name: Test
+          command: |
+            mkdir -p /tmp/junit
+            stack --no-terminal test -j2 liquid-fixpoint:test --flag liquid-fixpoint:devel --ta "--fixpoint-opts --interpreter" --test-arguments="--xml=/tmp/junit/main-test-results.xml"
+            stack --no-terminal test -j2 liquid-fixpoint:test --flag liquid-fixpoint:devel --test-arguments="--xml=/tmp/junit/main-test-results-no-interpreter.xml"
+            stack --no-terminal haddock --flag liquid-fixpoint:devel --test --no-run-tests --no-haddock-deps --haddock-arguments="--no-print-missing-docs"
+            # mkdir -p $CIRCLE_TEST_REPORTS/tasty
+            # cp -r tests/logs/cur $CIRCLE_TEST_REPORTS/tasty/log
+      - run:
+          name: Dist
+          command: stack --no-terminal sdist

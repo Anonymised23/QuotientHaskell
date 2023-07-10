@@ -1,0 +1,38 @@
+flags:
+  liquidhaskell:
+    devel: true
+  liquid-platform:
+    devel: true
+  tests:
+    stack: true
+extra-package-dbs: []
+ghc-options:
+  hscolour: -w
+  liquidhaskell-boot: -j
+  liquidhaskell: -j
+packages:
+- liquid-fixpoint
+- liquid-prelude
+- liquid-vector
+- liquid-parallel
+- liquid-platform
+- liquidhaskell-boot
+- tests
+- tests/benchmarks/popl18/lib
+- benchmark-timings
+- .
+extra-deps:
+- hashable-1.4.2.0
+- rest-rewrite-0.4.1
+- smtlib-backends-0.3
+- smtlib-backends-process-0.3
+- git: https://github.com/qnikst/ghc-timings-report
+  commit: 45ef3498e35897712bde8e002ce18df6d55f8b15
+# for tests
+- strip-ansi-escape-0.1.0.0@sha256:08f2ed93b16086a837ec46eab7ce8d27cf39d47783caaeb818878ea33c2ff75f,1628
+
+resolver: lts-20.1
+
+nix:
+  packages: [cacert, git, hostname, z3]
+  path: [nixpkgs=./nixpkgs.nix]

@@ -1,0 +1,1 @@
+qualif SelfSet(v : a, xs : [a]): (Set_mem v (listElts xs))

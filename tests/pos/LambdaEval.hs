@@ -1,0 +1,162 @@
+{-@ LIQUID "--no-termination" @-}
+
+module LambdaEval () where
+
+import Data.List        (lookup)
+
+import Language.Haskell.Liquid.Prelude
+
+---------------------------------------------------------------------
+----------------------- Datatype Definition -------------------------
+---------------------------------------------------------------------
+
+import Prelude hiding (error)
+
+{-@ error :: a -> b @-}
+error :: a -> b
+error x = error x
+
+type Bndr
+  = Int
+
+data Expr
+  = Lam Bndr Expr
+  | Var Bndr
+  | App Expr Expr
+  | Const Int
+  | Plus Expr Expr
+  | Pair Expr Expr
+  | Fst Expr
+  | Snd Expr
+
+{-@
+data Expr
+  = Lam   { eX :: Bndr, eBody :: Expr }
+  | Var   { eX :: Bndr                }
+  | App   { eL :: Expr, eR    :: Expr }
+  | Const { eN :: Int                 }
+  | Plus  { eL :: Expr, eR :: Expr    }
+  | Pair  { eL :: Expr, eR :: Expr    }
+  | Fst   { eL :: Expr                }
+  | Snd   { eL :: Expr                }
+@-}
+
+{-@ measure elen @-}
+elen :: (Expr) -> Int
+elen (Lam x e)    = 1 + (elen e)
+elen (Var x)      = 0
+elen (App e1 e2)  = 1 + (elen e1) + (elen e2)
+elen (Const i)    = 1
+elen (Plus e1 e2) = 1 + (elen e1) + (elen e2)
+elen (Pair e1 e2) = 1 + (elen e1) + (elen e2)
+elen (Fst e)      = 1 + (elen e)
+elen (Snd e)      = 1 + (elen e)
+
+
+{-@ invariant {v:Expr | (elen v) >= 0} @-}
+
+{-@ measure isValue @-} 
+isValue :: Expr -> Bool
+isValue (Const i)    = True
+isValue (Lam x e)    = True
+isValue (Var x)      = False
+isValue (App e1 e2)  = False
+isValue (Plus e1 e2) = False
+isValue (Fst e)      = False
+isValue (Snd e)      = False
+isValue (Pair e1 e2) = (isValue e1) && (isValue e2)
+
+{-@ type Value = {v: Expr | isValue v } @-}
+
+---------------------------------------------------------------------
+-------------------------- The Evaluator ----------------------------
+---------------------------------------------------------------------
+
+{-@ decrease evalVar 2 @-}
+evalVar :: Bndr -> [(Bndr, Expr)] -> Expr
+evalVar x ((y,v):sto)
+  | x == y
+  = v
+  | otherwise
+  = evalVar x sto
+
+evalVar x []
+  = error "unbound variable"
+
+
+{-@ decrease eval 2 @-}
+{-@ eval :: [(Bndr, Value)] -> Expr -> ([(Bndr, Value)], Value) @-}
+eval sto (Const i)
+  = (sto, Const i)
+
+eval sto (Var x)
+  = (sto, evalVar x sto)
+
+eval sto (Plus e1 e2)
+  = let (_, e1') = eval sto e1
+        (_, e2') = eval sto e2
+    in case (e1, e2) of
+         (Const i1, Const i2) -> (sto, Const (i1 + i2))
+         _                    -> error "non-integer addition"
+
+eval sto (App e1 e2)
+  = let (_,    v2 ) = eval sto e2
+        (sto1, e1') = eval sto e1
+    in case e1' of
+         (Lam x e) -> eval ((x, v2): sto1) e
+         _         -> error "non-function application"
+
+eval sto (Lam x e)
+  = (sto, Lam x e)
+
+eval sto (Pair e1 e2)
+  = (sto, Pair v1 v2)
+  where (_, v1) = eval sto e1
+        (_, v2) = eval sto e2
+
+eval sto (Fst e)
+  = let (sto', e') = eval sto e in
+    case e' of
+      Pair v _ -> (sto', v)
+      _        -> error "non-tuple fst"
+
+eval sto (Snd e)
+  = let (sto', e') = eval sto e in
+    case e' of
+      Pair _ v -> (sto', v)
+      _        -> error "non-tuple snd"
+
+---------------------------------------------------------------------
+-------------------------- Value Checker ----------------------------
+---------------------------------------------------------------------
+
+{-@ assert check :: {v: Expr | isValue v } -> Bool @-}
+check (Const _)    = True
+check (Lam _ _)    = True
+check (Var _)      = liquidAssertB False
+check (App _ _)    = liquidAssertB False
+check (Pair v1 v2) = check v1 && check v2
+check (Fst _)      = liquidAssertB False
+check (Snd _)      = liquidAssertB False
+check (Plus _ _)   = liquidAssertB False
+
+---------------------------------------------------------------------
+-------------------------- Unit Tests -------------------------------
+---------------------------------------------------------------------
+
+{-
+tests =
+  let (f,g,x) = (0,1,2)
+      e1      = Lam x (Var x)
+      e2      = App e1 e1
+      e3      = Lam f (Lam g (Lam x (App (Var f)  (App (Var g) (Var x)))))
+      e4      = Const 10
+      e5      = App e1 e4
+      e6      = Lam x (Plus (Var x) e4)
+      e7      = App (App e3 e6) e6
+      e8      = Pair (App e7 (Const 0)) (App e7 (Const 100))
+      e9      = Fst e8
+      e10     = Snd e9
+      vs      = map (snd . eval []) [e1, e2, e3, e4, e5, e6, e7, e8, e9, e10]
+  in map check vs
+  -}

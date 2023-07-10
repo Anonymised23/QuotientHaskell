@@ -1,0 +1,18 @@
+{-@ LIQUID "--expect-error-containing=Multiple specifications for `pig`" @-}
+{-@ LIQUID "--exactdc" @-}
+
+module ShadowFieldReflect where
+
+-- LH should give an error message that the field selectors `pig`
+-- is shadowed and should be renamed.
+
+{-@ data Zig = Zonk { pig :: Int } @-}
+data Zig = Zonk Int
+
+{-@ prop :: z:Zig -> {v:Int | v = pig z} @-}
+prop :: Zig -> Int
+prop (Zonk n) = n
+
+{-@ reflect pig @-}
+pig :: Int -> Int
+pig a = a + 1
