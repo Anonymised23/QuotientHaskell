@@ -407,6 +407,11 @@ elaborateSpecType' partialTp coreToLogic simplify t =
       pure (RAllP pvbind eTout, bts')
     -- pargs not handled for now
     -- RApp tycon args pargs reft
+    (RApp tc@(RQTyCon _ ut _ _ _) args pargs ureft) -> do
+      (ut', _) <- elaborateSpecType' partialTp coreToLogic simplify ut
+      elaborateSpecType' partialTp coreToLogic simplify
+        $ RApp (tc { rqtyUType = ut' }) args pargs ureft
+
     RApp tycon args pargs ureft@(MkUReft reft@(F.Reft (vv, _)) p)
       | isClass tycon -> pure (t, [])
       | otherwise -> do

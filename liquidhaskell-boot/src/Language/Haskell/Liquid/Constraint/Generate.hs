@@ -729,8 +729,8 @@ cconsE' γ e@(Cast e' c) t
   = do t' <- castTy γ (exprType e) e' c
        addC (SubC γ (F.notracepp ("Casted Type for " ++ GM.showPpr e ++ "\n init type " ++ showpp t) t') t) ("cconsE Cast: " ++ GM.showPpr e)
 
--- cconsE' γ e (RApp (RQTyCon _ ut _ tvs _) ts _ _)
---  = cconsE' γ e (appQTyCon ut tvs ts)
+cconsE' γ e (RApp (RQTyCon _ ut _ tvs _) ts _ _)
+  = cconsE' γ e (appQuotTyCon ut tvs ts)
 
 cconsE' γ e t
   = do  te  <- consE γ e

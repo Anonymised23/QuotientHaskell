@@ -1113,7 +1113,7 @@ mkSpec name xs         = (name,) $ qualifySpec (symbol name) Measure.Spec
     qDecls  = [q | QDecl  q <- xs]
     pragmas
       = if not (null qDecls) then
-          "reflection" : [s | Pragma s <- xs]
+          "--reflection" : [s | Pragma s <- xs]
         else [s | Pragma s <- xs]
 
 -- | Parse a single top level liquid specification

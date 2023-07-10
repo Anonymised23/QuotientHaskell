@@ -1988,7 +1988,7 @@ elimQuotTyConsInSort = substQuotElim' mempty
 
 substQuotElim :: M.HashMap RTyVar SpecType -> SpecType -> SpecType
 substQuotElim subs (RVar v r)
-  = case M.lookup v subs of
+  = case M.lookup (F.tidySymbol $ F.symbol v) (M.mapKeys (F.tidySymbol . F.symbol) subs) of
       Nothing -> RVar v r
       Just t  -> t
 substQuotElim subs (RFun b inf i o r)
