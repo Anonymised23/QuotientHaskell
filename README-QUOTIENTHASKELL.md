@@ -7,4 +7,4 @@ INSTALLATION INSTRUCTIONS FOR QUOTIENT HASKELL
    - You can use brew with Mac, though Rosetta is necessary for M1/M2 architectures
    - Otherwise, just follow the instructions at https://github.com/Z3Prover/z3
 
-3. Follow the Liquid Haskell build instructions found in the README of Quotient Haskell (found at https://github.com/Anonymised23/QuotientHaskell)
+3. Follow the Liquid Haskell build instructions found in the README of the Quotient Haskell repository
