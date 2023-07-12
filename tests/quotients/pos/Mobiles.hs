@@ -1,5 +1,14 @@
 module Mobiles () where
 
+data Tree a = Empty | Leaf a | Join (Tree a) (Tree a)
+
+{-@
+data List a
+  =  Tree a
+  |/ idl :: x:List a -> Join Empty x == x
+@-}
+
+{-
 {-@
 data SInt
   = Int
@@ -35,4 +44,4 @@ test (Bin x t u)       = Bin x t u-}
 {-@ tmap :: (a -> b) -> Mobile a -> Mobile b @-} 
 tmap :: (a -> b) -> Tree a -> Tree b
 tmap f Leaf = Leaf
-tmap f (Bin x t u) = Bin (f x) (tmap f t) (tmap f u)
+tmap f (Bin x t u) = Bin (f x) (tmap f t) (tmap f u)-}
