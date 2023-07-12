@@ -27,6 +27,7 @@ import           Prelude hiding (error)
 
 import           Text.PrettyPrint.HughesPJ hiding (first, parens)
 
+import           Data.List           (foldl')
 import           Data.Maybe          (fromMaybe)
 import           Control.Monad
 import           Control.Monad.State (gets)
@@ -44,7 +45,7 @@ import           Language.Haskell.Liquid.Types hiding (loc)
 import           Language.Haskell.Liquid.Constraint.Types
 import           Language.Haskell.Liquid.Constraint.Env
 import           Language.Haskell.Liquid.Constraint.Constraint
-import           Language.Haskell.Liquid.Constraint.Monad (envToSub)
+import           Language.Haskell.Liquid.Constraint.Monad (addWarning, envToSub)
 
 --------------------------------------------------------------------------------
 splitW ::  WfC -> CG [FixWfC]
@@ -73,6 +74,9 @@ splitW (WfC γ (RAllP _ r))
 
 splitW (WfC γ t@(RVar _ _))
   = bsplitW γ t
+
+splitW (WfC γ (RApp (RQTyCon _ ut _ vs _) ts _ _))
+  = splitW (WfC γ (appQuotTyCon ut vs ts))
 
 splitW (WfC γ t@(RApp _ ts rs _))
   =  do ws    <- bsplitW γ t
@@ -231,26 +235,43 @@ splitC allowTC (SubC γ t1'@(RAllT α1 t1 _) t2'@(RAllT α2 t2 _))
           (Just (x1, _), Just (x2, _)) -> F.mkSubst [(x1, F.EVar x2)]
           _                            -> F.mkSubst []
 
+splitC _ (SubC γ t1@(RApp (RQTyCon c1 _ _ _ vs) ts _ _) t2@(RApp (RQTyCon c2 _ _ _ _) us _ _))
+  | c1 == c2 = do
+      (t1',t2') <- unifyVV t1 t2
+      cs    <- bsplitC γ t1' t2'
+      γ'    <- if bscope (getConfig γ) then γ `extendEnvWithVV` t1' else return γ
+      csvar  <-  splitsCWithVariance γ' ts us vs
+      return $ cs ++ csvar
+  | otherwise = do
+      addWarning
+        $ ErrQuotSub (getLocation γ)
+                     (pprint c2 <+> text " is not a subquotient of " <+> pprint c1)
+      return []
+
+splitC allowTC (SubC γ t (RApp (RQTyCon _ ut _ vs _) ts _ _))
+  | t == foldl' (flip subsTyVarMeet') ut (zip vs ts) = return []
+  | otherwise = splitC allowTC (SubC γ t (appQuotTyCon ut vs ts))
+
+splitC _ (SubC γ (RApp (RQTyCon c _ _ _ _) _ _ _) t) = do
+  addWarning
+    $ ErrQuotSub (getLocation γ)
+                  ("quotient type " <+> pprint c <+> text " is not a subtype of " <+> pprint t)
+  return []
+
 splitC allowTC (SubC _ (RApp c1 _ _ _) (RApp c2 _ _ _)) | (if allowTC then isEmbeddedDict else isClass) c1 && c1 == c2
   = return []
 
-splitC _ (SubC γ t1@RApp{} t2@RApp{})
+splitC _ (SubC γ t1@(RApp (RTyCon _ _ inf) _ _ _) t2@RApp{})
   = do
       (t1',t2') <- unifyVV t1 t2
       cs    <- bsplitC γ t1' t2'
       γ'    <- if bscope (getConfig γ) then γ `extendEnvWithVV` t1' else return γ
-      let RApp tyc t1s r1s _ = t1'
+      let RApp _ t1s r1s _ = t1'
       let RApp _ t2s r2s _ = t2'
-
-      case tyc of
-        RTyCon _ _ inf -> do
-          let isapplied = True -- TC.tyConArity (rtc_tc c) == length t1s
-          csvar  <-  splitsCWithVariance           γ' t1s t2s $ varianceTyArgs inf
-          csvar' <-  rsplitsCWithVariance isapplied γ' r1s r2s $ variancePsArgs inf
-          return $ cs ++ csvar ++ csvar'
-        RQTyCon _ _ _ _ vs -> do
-          csvar  <-  splitsCWithVariance γ' t1s t2s vs
-          return $ cs ++ csvar
+      let isapplied = True -- TC.tyConArity (rtc_tc c) == length t1s
+      csvar  <-  splitsCWithVariance           γ' t1s t2s $ varianceTyArgs inf
+      csvar' <-  rsplitsCWithVariance isapplied γ' r1s r2s $ variancePsArgs inf
+      return $ cs ++ csvar ++ csvar'
 
 splitC _ (SubC γ t1@(RVar a1 _) t2@(RVar a2 _))
   | a1 == a2
@@ -262,11 +283,10 @@ splitC _ (SubC γ t1 t2)
 splitC _ (SubR γ o r)
   = do ts     <- getTemplates
        let r1' = pruneUnsortedReft γ'' ts r1
-       return
-        $ if F.reftPred rr == F.PTrue then
-            []
-          else
-            F.subC γ' r1' r2 Nothing tag ci
+       return $ if F.reftPred rr == F.PTrue then
+         []
+       else
+         F.subC γ' r1' r2 Nothing tag ci
   where
     γ'' = feEnv $ fenv γ
     γ'  = feBinds $ fenv γ

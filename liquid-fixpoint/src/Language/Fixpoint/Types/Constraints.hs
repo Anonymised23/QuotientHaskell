@@ -114,6 +114,7 @@ import qualified Language.Fixpoint.Utils.Files as Files
 import qualified Language.Fixpoint.Solver.Stats as Solver
 
 import           Language.Fixpoint.Misc
+
 import           Text.PrettyPrint.HughesPJ.Compat
 import qualified Data.HashMap.Strict       as M
 import qualified Data.HashSet              as S
@@ -713,6 +714,7 @@ data GInfo c a = FI
   , quals    :: ![Qualifier]               -- ^ Abstract domain
   , bindInfo :: !(M.HashMap BindId a)      -- ^ Metadata about binders
   , ddecls   :: ![DataDecl]                -- ^ User-defined data declarations
+  -- , qdecls   :: ![QuotDecl Expr]           -- ^ User-defined quotient declarations
   , hoInfo   :: !HOInfo                    -- ^ Higher Order info
   , asserts  :: ![Triggered Expr]          -- ^ TODO: what is this?
   , ae       :: AxiomEnv                   -- ^ Information about reflected function defs
@@ -741,6 +743,7 @@ instance Semigroup (GInfo c a) where
                 , quals    = quals i1    <> quals i2
                 , bindInfo = bindInfo i1 <> bindInfo i2
                 , ddecls   = ddecls i1   <> ddecls i2
+                -- , qdecls   = qdecls i1   <> qdecls i2
                 , hoInfo   = hoInfo i1   <> hoInfo i2
                 , asserts  = asserts i1  <> asserts i2
                 , ae       = ae i1       <> ae i2
@@ -758,6 +761,7 @@ instance Monoid (GInfo c a) where
                      , quals    = mempty
                      , bindInfo = mempty
                      , ddecls   = mempty
+                     -- , qdecls   = mempty
                      , hoInfo   = mempty
                      , asserts  = mempty
                      , ae       = mempty
@@ -795,6 +799,7 @@ toFixpoint cfg x' =    cfgDoc   cfg
     kutsDoc       = toFix    . kuts
     -- packsDoc      = toFix    . packs
     declsDoc      = vcat     . map ((text "data" <+>) . toFix) . L.sort . ddecls
+    -- quotsDoc      = vcat     . map ((text "data" <+>) . toFix) . L.sort . qdecls
     (ubs, ebs)    = splitByQuantifiers (bs x') (ebinds x')
     bindsDoc      = toFix    ubs
                $++$ toFix    ebs

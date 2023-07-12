@@ -113,6 +113,7 @@ liquidQuery cfg tgt info edc = do
   -- print (show $ gsTySigs $ gsSig $ giSpec info3)
   let cgi     = {-# SCC "generateConstraints" #-} generateConstraints $! info3 
   when False (dumpCs cgi)
+  -- putStrLn $ render $ pprintMany (hsCs cgi)
   -- whenLoud $ mapM_ putStrLn [ "****************** CGInfo ********************"
                             -- , render (pprint cgi)                            ]
   out        <- timedAction names $ solveCs cfg tgt cgi info3 names

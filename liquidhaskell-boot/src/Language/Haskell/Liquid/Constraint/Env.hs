@@ -42,6 +42,12 @@ module Language.Haskell.Liquid.Constraint.Env (
   -- * Lookup CGEnv
  , getLocation
 
+  -- * Variables that are free in open terms
+ , addFreeBinder
+ , addFreeBinders
+ , removeFreeBinder
+ , removeFreeBinders
+
 ) where
 
 
@@ -155,6 +161,18 @@ addBind l x r = do
 
 addClassBind :: CGEnv -> SrcSpan -> SpecType -> CG [((F.Symbol, F.Sort), F.BindId)]
 addClassBind γ l = mapM (uncurry (addBind l)) . classBinds (emb γ)
+
+addFreeBinder :: F.Symbol -> CGEnv -> CGEnv
+addFreeBinder sym env = env { binders = S.insert sym (binders env) }
+
+addFreeBinders :: [F.Symbol] -> CGEnv -> CGEnv
+addFreeBinders syms env = env { binders = L.foldl' (flip S.insert) (binders env) syms }
+
+removeFreeBinder :: F.Symbol -> CGEnv -> CGEnv
+removeFreeBinder sym env = env { binders = S.delete sym (binders env) }
+
+removeFreeBinders :: [F.Symbol] -> CGEnv -> CGEnv
+removeFreeBinders syms env = env { binders = L.foldl' (flip S.delete) (binders env) syms }
 
 {- see tests/pos/polyfun for why you need everything in fixenv -}
 addCGEnv :: (SpecType -> SpecType) -> CGEnv -> (String, F.Symbol, SpecType) -> CG CGEnv

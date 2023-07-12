@@ -1497,7 +1497,7 @@ toType useRFInfo (RAllP _ t)
 toType _ (RVar (RTV α) _)
   = TyVarTy α
 toType useRFInfo (RApp RQTyCon { rqtyUType = ut, rqtyTyVars = vs } ts _ _)
-  = toType useRFInfo $ subts (zip vs $ map (const () <$>) ts) ut
+  = toType useRFInfo $ appQuotTyConSort (void ut) vs (map void ts)
 toType useRFInfo (RApp RTyCon{rtc_tc = c} ts _ _)
   = TyConApp c (toType useRFInfo <$> filter notExprArg ts)
   where
@@ -1979,6 +1979,9 @@ instance Semigroup (Positions a) where
 --------------------------------------------------------------------------------
 appQuotTyCon :: SpecType -> [RTyVar] -> [SpecType] -> SpecType
 appQuotTyCon ut vs ts = substQuotElim (M.fromList $ zip vs ts) ut
+
+appQuotTyConSort :: RSort -> [RTyVar] -> [RSort] -> RSort
+appQuotTyConSort ut vs ts = substQuotElim' (M.fromList $ zip vs ts) ut
 
 elimQuotTyCons :: SpecType -> SpecType
 elimQuotTyCons = substQuotElim mempty

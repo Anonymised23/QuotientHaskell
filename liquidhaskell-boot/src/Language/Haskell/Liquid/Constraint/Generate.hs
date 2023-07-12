@@ -32,11 +32,12 @@ import           Text.PrettyPrint.HughesPJ hiding ((<>))
 import           Control.Monad.State
 import qualified Control.Monad.State.Strict                    as ST
 import           Data.Functor ((<&>))
-import           Data.Maybe                                    (fromMaybe, catMaybes, isJust, mapMaybe)
+import           Data.Maybe                                    (fromMaybe, catMaybes, isJust, mapMaybe, isNothing)
 import qualified Data.HashMap.Strict                           as M
 import qualified Data.HashSet                                  as S
 import qualified Data.List                                     as L
 import qualified Data.Foldable                                 as F
+import           Data.Hashable                                 (Hashable, hashWithSalt)
 import qualified Data.Traversable                              as T
 import qualified Data.Text                                     as Text
 import qualified Data.Text.Encoding                            as Text
@@ -69,6 +70,7 @@ import           Language.Haskell.Liquid.Transforms.CoreToLogic (weakenResult, r
 import           Language.Haskell.Liquid.Bare.DataType (dataConMap, makeDataConChecker)
 
 import           Language.Haskell.Liquid.Types hiding (binds, Loc, loc, Def)
+--import Debug.Trace (trace)
 
 --------------------------------------------------------------------------------
 -- | Constraint Generation: Toplevel -------------------------------------------
@@ -91,7 +93,7 @@ consAct :: CGEnv -> Config -> TargetInfo -> CG ()
 consAct γ cfg info = do
   let sSpc = gsSig . giSpec $ info
   let gSrc = giSrc info
-  when (gradual cfg) (mapM_ (addW . WfC γ . elimQuotTyCons . val . snd) (gsTySigs sSpc ++ gsAsmSigs sSpc))
+  when (gradual cfg) (mapM_ (addW . WfC γ . val . snd) (gsTySigs sSpc ++ gsAsmSigs sSpc))
   γ' <- foldM (consCBTop cfg info) γ (giCbs gSrc)
   -- Relational Checking: the following only runs when the list of relational specs is not empty
   (ψ, γ'') <- foldM (consAssmRel cfg info) ([], γ') (gsAsmRel sSpc ++ gsRelation sSpc)
@@ -626,14 +628,14 @@ cconsE' :: CGEnv -> CoreExpr -> SpecType -> CG ()
 --------------------------------------------------------------------------------
 cconsE' γ (Case e x τ cases) t
   = do γ'  <- consCBLet γ (NonRec x e)
-       forM_ cases $ cconsCase γ' x t nonDefAlts
+       γs  <- forM cases $ cconsCase γ' x t nonDefAlts
 
        case lookupREnv (F.symbol x) (renv γ') of
          Just (RApp (RQTyCon _ ut qs vs _) ts _ _) -> do
-           forM_ (respectCases qs) $ \(u, q, bs) -> do
-            let baseT  = rTypeSort (emb γ) $ appQuotTyCon ut vs ts
+           forM_ (respectCases γs qs) $ \(u, q, bs, syms, cγ) -> do
+            let baseT  = rTypeSort (emb cγ) $ appQuotTyCon ut vs ts
                 vSub   = zip vs $ map (const () <$>) ts
-            checkRespectability γ qCodomain (applyCase baseT) u (applySub vSub q) bs
+            checkRespectability cγ syms qCodomain (applyCase cγ baseT) u (applySub vSub q) bs
          _                                       -> return ()
     where
       qCodomain :: Maybe QuotientSpec
@@ -646,19 +648,19 @@ cconsE' γ (Case e x τ cases) t
         { rqtVars = subts ss <$> rqtVars q
         }
 
-      applyCase :: F.Sort -> F.Expr -> CG (Maybe F.Expr)
-      applyCase ut r = do
+      applyCase :: CGEnv -> F.Sort -> F.Expr -> CG (Maybe F.Expr)
+      applyCase cγ ut r = do
         adts    <- gets cgADTs
         let dm   = dataConMap adts
         let expr = coreToLogic True (Case (Var x) x τ cases)
-        case runToLogic (emb γ) mempty dm (\m -> todo Nothing ("coreToLogic not working applyCase: " ++ m)) expr of
+        case runToLogic (emb cγ) mempty dm (\m -> todo Nothing ("coreToLogic not working applyCase: " ++ m)) expr of
           Left  er -> error $ show er
-          Right ce -> Just <$> normaliseWithBind γ (F.symbol x) ut ce r
+          Right ce -> Just <$> normaliseWithBind cγ (F.symbol x) ut ce r
 
-      respectCases :: [F.Symbol] -> [(QuotientUnifier, RQuotient, Expr CoreBndr)]
-      respectCases qs
-        = [ (u, q, ae)
-          | (a, bndrs, ae) <- fullNonDefAlts
+      respectCases :: [CGEnv] -> [F.Symbol] -> [(QuotientUnifier, RQuotient, Expr CoreBndr, [F.Symbol], CGEnv)]
+      respectCases γs qs
+        = [ (u, q, ae, map F.symbol bndrs, γ')
+          | (a, bndrs, ae, γ') <- fullNonDefAlts γs
           , q              <- mapMaybe (`M.lookup` cgQuotients γ) qs
           , let u = unifyWithQuotient a bndrs q
           , isUnified u
@@ -668,8 +670,8 @@ cconsE' γ (Case e x τ cases) t
       isUnified DidNotUnify = False
       isUnified _           = True
 
-      fullNonDefAlts :: [(AltCon, [CoreBndr], Expr CoreBndr)]
-      fullNonDefAlts = [ (a, bndrs, ae) | Alt a bndrs ae <- cases, a /= DEFAULT ]
+      fullNonDefAlts :: [CGEnv] -> [(AltCon, [CoreBndr], Expr CoreBndr, CGEnv)]
+      fullNonDefAlts γs = [ (a, bndrs, ae, γ') | (γ', Alt a bndrs ae) <- zip γs cases, a /= DEFAULT ]
 
       nonDefAlts = [a | Alt a _ _ <- cases, a /= DEFAULT]
       _msg = "cconsE' #nonDefAlts = " ++ show (length nonDefAlts)
@@ -684,10 +686,11 @@ cconsE' γ e t
 
 cconsE' γ e@(Let b@(NonRec x _) ee) t
   = do sp <- gets specLVars
+       let γ' = removeFreeBinder (F.symbol x) γ
        if x `S.member` sp
-         then cconsLazyLet γ e t
-         else do γ'  <- consCBLet γ b
-                 cconsE γ' ee t
+         then cconsLazyLet γ' e t
+         else do γ''  <- consCBLet γ' b
+                 cconsE γ'' ee t
 
 cconsE' γ e (RAllP p t)
   = cconsE γ' e t''
@@ -704,12 +707,12 @@ cconsE' γ (Let b e) t
 cconsE' γ (Lam α e) (RAllT α' t r) | isTyVar α
   = do γ' <- updateEnvironment γ α
        addForAllConstraint γ' α e (RAllT α' t r)
-       cconsE γ' e $ subsTyVarMeet' (ty_var_value α', rVar α) t
+       cconsE (addFreeBinder (F.symbol α) γ') e $ subsTyVarMeet' (ty_var_value α', rVar α) t
 
 cconsE' γ (Lam x e) (RFun y i ty t r)
   | not (isTyVar x)
   = do γ' <- γ += ("cconsE", x', ty)
-       cconsE γ' e t'
+       cconsE (addFreeBinder (F.symbol x) γ') e t'
        addFunctionConstraint γ x e (RFun x' i ty t' r')
        addIdA x (AnnDef ty)
   where
@@ -729,8 +732,9 @@ cconsE' γ e@(Cast e' c) t
   = do t' <- castTy γ (exprType e) e' c
        addC (SubC γ (F.notracepp ("Casted Type for " ++ GM.showPpr e ++ "\n init type " ++ showpp t) t') t) ("cconsE Cast: " ++ GM.showPpr e)
 
+{-
 cconsE' γ e (RApp (RQTyCon _ ut _ tvs _) ts _ _)
-  = cconsE' γ e (appQuotTyCon ut tvs ts)
+  = cconsE' γ e (appQuotTyCon ut tvs ts)-}
 
 cconsE' γ e t
   = do  te  <- consE γ e
@@ -1202,11 +1206,13 @@ dropConstraints cgenv (RRTy cts _ OCons rt)
 dropConstraints _ t = return t
 
 -------------------------------------------------------------------------------------
-cconsCase :: CGEnv -> Var -> SpecType -> [AltCon] -> CoreAlt -> CG ()
+cconsCase :: CGEnv -> Var -> SpecType -> [AltCon] -> CoreAlt -> CG CGEnv
 -------------------------------------------------------------------------------------
 cconsCase γ x t acs (Alt ac ys ce)
   = do cγ <- caseEnv γ x acs ac ys mempty
-       cconsE cγ ce t
+       let cγ' = addFreeBinders (map F.symbol ys) cγ
+       cconsE cγ' ce t
+       return cγ'
 
 {-
 
@@ -1715,7 +1721,7 @@ unifyWithQuotient con bndrs quotient = unifyP con (rqtLeft quotient)
     dcSymbol = F.symbol . Ghc.dataConWorkId
 
     sym' :: CoreBndr -> F.Symbol
-    sym' = F.symbol . Ghc.getName
+    sym' = F.symbol -- . Ghc.getName
 
     var' :: CoreBndr -> F.QPattern
     var' = F.QPVar . sym'
@@ -1725,92 +1731,88 @@ unifyWithQuotient con bndrs quotient = unifyP con (rqtLeft quotient)
 
 checkRespectability
   :: CGEnv
+  -> [F.Symbol]         -- | Case binders
   -> Maybe QuotientSpec -- | Codomain (maybe a quotient type)
   -> (F.Expr -> CG (Maybe F.Expr))
   -> QuotientUnifier
   -> RQuotient
   -> Expr CoreBndr
   -> CG ()
-checkRespectability γ τ f u q e = coreExpr >>= \case
+checkRespectability γ bs τ f u q e = coreExpr >>= \case
   Nothing    -> return ()
   Just coreE -> case u of
     QDidSubsume v p _ -> do
       let right = substQPattern v p $ rqtRight q
-      addEquationC domain coreE right
+          prec  = getQuotientReft q
+      addEquationC (substQPattern v p <$> prec) domain coreE right
       where
         domain :: [(F.Symbol, SpecType)]
-        domain = M.toList $ M.delete v (rqtVars q)
+        domain
+          =   M.toList (M.delete v $ rqtVars q)
+          ++ mapMaybe (\x -> (x,) <$> lookupREnv x (renv γ)) bs
     PDidSubsume m    -> do
       let left = F.subst (F.Su $ toExpr <$> m) coreE
-      addEquationC domain left $ rqtRight q
+      addEquationC (getQuotientReft q) domain left $ rqtRight q
       where
         domain :: [(F.Symbol, SpecType)]
         domain = M.toList $ rqtVars q
-    LiteralUnified -> addEquationC domain coreE (rqtRight q)
+    LiteralUnified -> addEquationC (getQuotientReft q) domain coreE (rqtRight q)
       where
         domain :: [(F.Symbol, SpecType)]
         domain = M.toList $ rqtVars q
     DidNotUnify    -> return ()
   where
-    addEquationC :: [(F.Symbol, SpecType)] -> F.Expr -> F.Expr -> CG ()
-    addEquationC domain left right = do
+    addEquationC :: Maybe F.Expr -> [(F.Symbol, SpecType)] -> F.Expr -> F.Expr -> CG ()
+    addEquationC prec domain left right = do
       mcexpr <- f right
       -- _ <- error $ show τ
       case mcexpr of
         Just cexpr -> do
-          γ' <- foldlM addEEnv γ domain
-
+          γ' <- foldlM addEEnv γ domain -- (map (\(s, t) -> (s, elimQuotTyCons t)) domain)
+    
+          {-
           let expr
                 = addPrecondition $ case allRewrites γ' left cexpr of
                     [] -> F.PAtom F.Eq left cexpr
-                    rs -> F.POr (F.PAtom F.Eq left cexpr : rs)
+                    rs -> F.POr (F.PAtom F.Eq left cexpr : rs)-}
 
-          mkConstraint γ' expr ""
+          let rws
+                = case τ of
+                    Nothing   -> []
+                    Just spec ->
+                      let (rs, fvs) = qRewrites spec
+                          fvSet     = S.union (S.fromList (fvs ++ map fst domain)) (binders γ)
+                          getRW rwr = (rwResult rwr , rwCond rwr)
+                       in [ addPrecondition (andM rlpc rrpc) <$> simplifyEq rl rr
+                          | (rl, rlpc) <- (left, Nothing)  : map getRW (S.toList $ getRewrites fvSet rs left)
+                          , (rr, rrpc) <- (cexpr, Nothing) : map getRW (S.toList $ getRewrites fvSet rs cexpr)
+                          ]
+
+          case sequence rws of
+            Nothing -> return ()
+            Just [ex] -> mkConstraint γ' (addPrecondition prec ex) ""
+            Just es   -> mkConstraint γ' (addPrecondition prec $ F.POr es) ""
         Nothing -> return ()
+    
+    allQuotients :: QuotientSpec -> [RQuotient]
+    allQuotients spec = mapMaybe (`M.lookup` cgQuotients γ) (qsQuots spec)
 
-    addPrecondition :: F.Expr -> F.Expr
-    addPrecondition post
-      = case getQuotientReft q of
+    qRewrites :: QuotientSpec -> ([Rewrite], [F.Symbol])
+    qRewrites spec
+      = let addRw (rws, ss) rq
+              = ( Rewrite (rqtLeft rq) (rqtRight rq) (getQuotientReft rq) : rws
+                , ss ++ M.keys (rqtVars rq)
+                )
+         in F.foldl' addRw ([], []) $ allQuotients spec
+
+    addPrecondition :: Maybe F.Expr -> F.Expr -> F.Expr
+    addPrecondition prec post
+      = case prec of
           Nothing -> post
           Just pc -> F.PImp pc post
 
-    allRewrites :: CGEnv -> F.Expr -> F.Expr -> [F.Expr]
-    allRewrites γ' l r
-      = case τ of
-          Nothing   -> []
-          Just spec -> mapMaybe mkLEquation quotients ++ mapMaybe mkREquation quotients
-            where
-              fvSet :: [F.Symbol] -> S.HashSet F.Symbol
-              fvSet ss = S.fromList (M.keys (reLocal $ renv γ') ++ ss)
-
-              mkLEquation :: RQuotient -> Maybe F.Expr
-              mkLEquation qt
-                = case unifyExprWithPattern (fvSet $ M.keys $ rqtVars qt) (rqtLeft qt) l of
-                    NoUnification    -> Nothing
-                    LiteralDidUnify  -> Just $ F.PAtom F.Eq l (rqtRight qt)
-                    UnifiedWith s s' ->
-                      let sub  = F.Su (toExpr <$> s)
-                          sub' = F.Su s'
-                       in Just $ F.PAtom F.Eq (F.subst sub l) (F.subst sub' $ rqtRight qt)
-
-              mkREquation :: RQuotient -> Maybe F.Expr
-              mkREquation qt
-                = case unifyExprWithPattern (fvSet $ M.keys $ rqtVars qt) (rqtLeft qt) r of
-                    NoUnification    -> Nothing
-                    LiteralDidUnify  -> Just $ F.PAtom F.Eq r (rqtRight qt)
-                    UnifiedWith s s' ->
-                      let sub  = F.Su (toExpr <$> s)
-                          sub' = F.Su s'
-                       in Just $ F.PAtom F.Eq (F.subst sub l) (F.subst sub' $ rqtRight qt)
-
-              quotients :: [RQuotient]
-              quotients = mapMaybe (`M.lookup` cgQuotients γ') (qsQuots spec)
-
     mkConstraint :: CGEnv -> F.Expr -> String -> CG ()
-    mkConstraint γ' p = addC (SubR γ' OCons $ uReft (F.vv_, p))
-
-    -- mkConstraint :: CGEnv -> Text.Text -> F.Expr -> SubC
-    -- mkConstraint γ' name x = SubR γ' OInv (MkUReft (F.Reft (F.symbol name, x)) mempty)
+    mkConstraint γ' p = addC (SubR γ' (OQuot (rqtName q)) $ uReft (F.vv_, p))
 
     coreExpr :: CG (Maybe F.Expr)
     coreExpr = runToLogic' γ e "checkRespectability"
@@ -1838,9 +1840,6 @@ getQuotientReft q
       getReft (RRTy _ r _ _)   = Just r
       getReft (RHole r)        = Just r
 
-tidyExpr :: F.Expr -> F.Expr
-tidyExpr = F.substf (F.eVar . F.tidySymbol)
-
 runToLogic' :: CGEnv -> CoreExpr -> String -> CG (Maybe F.Expr)
 runToLogic' γ e msg = do
   adts    <- gets cgADTs
@@ -1848,7 +1847,136 @@ runToLogic' γ e msg = do
   let dm = dataConMap adts
   return $ case runToLogic (emb γ) mempty dm (\x -> todo Nothing ("coreToLogic not working " ++ msg ++ ": " ++ x)) (coreToLogic allowTC e) of
     Left  _  -> Nothing
-    Right ce -> Just (tidyExpr ce)
+    Right ce -> Just ce
+
+-- | Simplified rewriting (achieved via unification with QPatterns)
+-- | Possible improvement would be to use full rewriting of LH; requires some work (and caution) to achieve this
+data Rewrite = Rewrite
+  { rwPattern      :: F.QPattern
+  , rwExpr         :: F.Expr
+  , rwPrecondition :: Maybe F.Expr
+  } deriving Show
+
+data RewriteResult = RWResult
+  { rwCond   :: Maybe F.Expr                  -- | The rewriting precondition
+  , rwResult :: F.Expr                        -- | The resulting expression
+  , rwSubst  :: M.HashMap F.Symbol F.QPattern -- | The substitution applied
+  } deriving Show
+
+instance Eq RewriteResult where
+  (RWResult c r _) == (RWResult c' r' _) = c == c' && r == r'
+
+instance Hashable RewriteResult where
+  hashWithSalt n (RWResult c r _) = hashWithSalt (hashWithSalt n c) r
+
+mapResultExpr :: (F.Expr -> F.Expr) -> RewriteResult -> RewriteResult
+mapResultExpr f rw = rw { rwResult = f (rwResult rw) }
+
+getRewrites
+  :: S.HashSet F.Symbol
+  -> [Rewrite]
+  -> F.Expr
+  -> S.HashSet RewriteResult
+getRewrites fvs rws e
+  = let inRws    = getInnerRewrites fvs rws e
+        outRws   = tryRewrite fvs rws e
+     in S.unions
+          [ S.fromList inRws
+          , S.fromList outRws
+          , S.fromList (concatMap appOuter inRws)
+          , S.fromList (concatMap appInner outRws)
+          ]
+    where
+      merge
+        :: M.HashMap F.Symbol F.QPattern
+        -> Maybe F.Expr
+        -> RewriteResult
+        -> Maybe RewriteResult
+      merge s p r@(RWResult q ex _)
+        = RWResult (andM p q) ex <$> mergePSubst fvs s (rwSubst r)
+
+      appOuter :: RewriteResult -> [RewriteResult]
+      appOuter (RWResult p ex sub)
+        = mapMaybe (merge sub p) $ tryRewrite fvs rws ex
+
+      appInner :: RewriteResult -> [RewriteResult]
+      appInner (RWResult p ex sub)
+        = mapMaybe (merge sub p) $ getInnerRewrites fvs rws ex
+
+andM :: Maybe F.Expr -> Maybe F.Expr -> Maybe F.Expr
+andM (Just p) Nothing                      = Just p
+andM Nothing (Just p)                      = Just p
+andM (Just (F.PAnd ps)) (Just (F.PAnd qs)) = Just $ F.PAnd (ps ++ qs)
+andM (Just (F.PAnd ps)) (Just p)           = Just $ F.PAnd (p : ps)
+andM (Just p) (Just (F.PAnd ps))           = Just $ F.PAnd (p : ps)
+andM (Just p) (Just q)                     = Just $ F.PAnd [p, q]
+andM Nothing Nothing                       = Nothing
+
+andMerge :: F.Expr -> F.Expr -> F.Expr
+andMerge (F.PAnd ps) (F.PAnd qs) = F.PAnd (ps ++ qs)
+andMerge (F.PAnd ps) p           = F.PAnd (p : ps)
+andMerge p           (F.PAnd ps) = F.PAnd (p : ps)
+andMerge p           q           = F.PAnd [p, q]
+
+andMerges :: [F.Expr] -> F.Expr
+andMerges [p] = p
+andMerges ps  = L.foldl' andMerge (F.PAnd []) ps
+
+orMerge :: F.Expr -> F.Expr -> F.Expr
+orMerge (F.POr ps) (F.POr qs) = F.POr (ps ++ qs)
+orMerge (F.POr ps) p          = F.POr (p : ps)
+orMerge p          (F.POr ps) = F.POr (p : ps)
+orMerge p          q          = F.POr [p, q]
+
+orMerges :: [F.Expr] -> F.Expr
+orMerges [p] = p
+orMerges ps  = L.foldl' andMerge (F.POr []) ps
+
+-- | Only handles cases for expressions of a quotient type where we can deduce that
+-- | its subexpressions inhabit the same quotient type. Can probably do something with
+-- | ECst here.
+getInnerRewrites
+  :: S.HashSet F.Symbol
+  -> [Rewrite]
+  -> F.Expr
+  -> [RewriteResult]
+getInnerRewrites fvs rws (F.ENeg e)
+  = (\(RWResult p e' s) -> RWResult p (F.ENeg e') s) <$> (S.toList $ getRewrites fvs rws e)
+getInnerRewrites fvs rws (F.EBin o l r)
+  = rewriteBinWith (F.EBin o) fvs rws l r
+getInnerRewrites fvs rws (F.EIte p i e) = rewriteBinWith (F.EIte p) fvs rws i e
+getInnerRewrites _ _ _ = mempty
+
+rewriteBinWith
+  :: (F.Expr -> F.Expr -> F.Expr)
+  -> S.HashSet F.Symbol
+  -> [Rewrite]
+  -> F.Expr
+  -> F.Expr
+  -> [RewriteResult]
+rewriteBinWith f fvs rws l r
+  = catMaybes
+      [ RWResult (andM pl pr) (f l' r') <$> mergePSubst fvs sl sr
+      | RWResult pl l' sl <- rewritesL
+      , RWResult pr r' sr <- rewritesR
+      ] ++ map (mapResultExpr (`f` r)) rewritesL ++ map (mapResultExpr (f l)) rewritesR
+    where
+      rewritesL = S.toList $ getRewrites fvs rws l
+      rewritesR = S.toList $ getRewrites fvs rws r
+
+tryRewrite
+  :: S.HashSet F.Symbol
+  -> [Rewrite]
+  -> F.Expr
+  -> [RewriteResult]
+tryRewrite fvs rws ex = mapMaybe (doTry ex) rws
+  where
+    doTry :: F.Expr -> Rewrite -> Maybe RewriteResult
+    doTry e rw
+      = case unifyExprWithPattern fvs (rwPattern rw) e of
+          NoUnification    -> Nothing 
+          LiteralDidUnify  -> Just (RWResult (rwPrecondition rw) (rwExpr rw) mempty)
+          UnifiedWith s s' -> Just (RWResult (F.subst (F.Su s') $ rwPrecondition rw) (F.subst (F.Su s') $ rwExpr rw) s)
 
 -- | Essentially NBE for expressions (doesn't evaluate *everything*)
 --   Assumes that expressions are well-typed.
@@ -1931,6 +2059,188 @@ guardTruth e = ST.gets $ \s -> go (nbeGuards s) e
       | F.any (== F.PNot e)  guards = Just False
       | otherwise                   = Nothing
 
+{-
+simplifyIf :: F.Expr -> F.Expr -> F.Expr -> F.Expr
+simplifyIf p i@(F.EIte q ti te) e
+  | te == e   = simplifyIf (andMerge p q) ti e
+  | otherwise = case e of
+      F.EIte r fi fe
+        | fi == i -> simplifyIf (orMerge p r) i fe
+      _ -> F.EIte p i e
+simplifyIf p i e@(F.EIte q fi fe)
+  | fi == i   = simplifyIf (orMerge p q) i fe
+  | otherwise = F.EIte p i e
+simplifyIf p i e = F.EIte p i e-}
+
+simplifyIf' :: F.Expr -> F.Expr -> F.Expr -> (F.Expr, F.Expr, F.Expr)
+simplifyIf' p i@(F.EIte q ti te) e
+  | te == e   = simplifyIf' (andMerge p q) ti e
+  | otherwise = case e of
+      F.EIte r fi fe
+        | fi == i -> simplifyIf' (orMerge p r) i fe
+      _ -> (p, i, e)
+simplifyIf' p i e@(F.EIte q fi fe)
+  | fi == i   = simplifyIf' (orMerge p q) i fe
+  | otherwise = (p, i, e)
+simplifyIf' p i e = (p, i, e)
+
+{-
+
+-- | Simplification to be done after rewriting normalised terms
+-- |   > Handles nested if expressions made by case expressions
+simplifyE :: F.Expr -> F.Expr
+simplifyE (F.EApp f a)      = F.EApp (simplifyE f) (simplifyE a)
+simplifyE (F.ENeg e)        = F.ENeg (simplifyE e)
+simplifyE (F.EBin o x y)    = F.EBin o (simplifyE x) (simplifyE y)
+simplifyE (F.EIte p i e)    = simplifyIf p i e
+simplifyE (F.ELam x e)      = F.ELam x (simplifyE e)
+simplifyE (F.ECst e t)      = F.ECst (simplifyE e) t
+simplifyE (F.ETApp e t)     = F.ETApp (simplifyE e) t
+simplifyE (F.ETAbs e s)     = F.ETAbs (simplifyE e) s
+simplifyE (F.PAnd ps)       = F.PAnd (map simplifyE ps)
+simplifyE (F.POr ps)        = F.POr  (map simplifyE ps)
+simplifyE (F.PNot p)        = F.PNot (simplifyE p)
+simplifyE (F.PImp p q)      = F.PImp (simplifyE p) (simplifyE q)
+simplifyE (F.PIff x y)      = F.PIff (simplifyE x) (simplifyE y)
+simplifyE (F.PAtom r x y)   = F.PAtom r (simplifyE x) (simplifyE y)
+simplifyE (F.PAll s e)      = F.PAll s (simplifyE e)
+simplifyE (F.PExist s e)    = F.PExist s (simplifyE e)
+simplifyE (F.PGrad k s g e) = F.PGrad k s g (simplifyE e)
+simplifyE (F.ECoerc s t e)  = F.ECoerc s t (simplifyE e)
+simplifyE e                 = e-}
+
+-- | An improved version of the Eq instance (does no interpretation, so is semi-definitional)
+-- | Essentially performs basic structural transformations to find equalities
+{-isEquivalent :: F.Expr -> F.Expr -> Bool
+isEquivalent = go mempty
+  where
+    go :: S.HashSet (F.Symbol, F.Symbol) -> F.Expr -> F.Expr -> Bool
+    go _  (F.ESym x)     (F.ESym y)      = x == y
+    go ss (F.EVar x)     (F.EVar y)      = x == y || S.member (x, y) ss
+    go ss (F.EApp f a)   (F.EApp g b)    = go ss f g && go ss a b
+    go ss (F.ENeg x)     (F.ENeg y)      = go ss x y
+    go ss (F.EBin o w x) (F.EBin o' y z) = o == o' && go ss w y && go ss x z
+    go ss (F.EIte p i e) (F.EIte q x y)  = go ss p q && go ss i x && go ss e y
+    go ss (F.ECst e t)   (F.ECst e' u)   = t == u && go ss e e'
+    go ss (F.ELam (s, t) e) (F.ELam (s', t') e')
+      = t == t' && go (S.insert (s, s') ss) e e'
+    go ss (F.ETApp e t)  (F.ETApp e' u)  = t == u && go ss e e'
+    go ss (F.ETAbs e s)  (F.ETAbs e' s') = go (S.insert (s, s') ss) e e'
+    go ss (F.PAnd ps)    (F.PAnd qs)     = null (L.deleteFirstsBy (go ss) ps qs)
+    go ss (F.POr ps)     (F.POr qs)      = null (L.deleteFirstsBy (go ss) ps qs)
+    go ss (F.PAnd [p])   (F.POr [q])     = go ss p q
+    go ss (F.PNot p)     (F.PNot q)      = go ss p q
+    go ss (F.PImp p q)   (F.PImp p' q')  = go ss p p' && go ss q q'
+    go ss (F.PIff p q)   (F.PIff p' q')  = go ss p p' && go ss q q'
+    go ss (F.PAtom r x y) (F.PAtom r' x' y')
+      = r == r' && go ss x x' && go ss y y'
+    go _  (F.PKVar k s)  (F.PKVar k' s') = k == k' && s == s'
+    go ss (F.PAll sts e) (F.PAll sts' e')
+      =  length sts == length sts'
+      && let isEq (b', ss') ((sy, t), (sy', t')) = (b' && t == t', S.insert (sy, sy') ss')
+             (b, s') = L.foldl' isEq (True, ss) $ zip sts sts'
+          in b && go s' e e'
+    go ss (F.PExist sts e) (F.PExist sts' e')
+      =  length sts == length sts'
+      && let isEq (b', ss') ((sy, t), (sy', t')) = (b' && t == t', S.insert (sy, sy') ss')
+             (b, s') = L.foldl' isEq (True, ss) $ zip sts sts'
+          in b && go s' e e'
+    go ss (F.PGrad k s g e) (F.PGrad k' s' g' e')
+      = k == k' && s == s' && g == g' && go ss e e'
+    go ss (F.ECoerc t u e) (F.ECoerc t' u' e')
+      = t == t' && u == u' && go ss e e'
+    go _ _ _ = False-}
+
+-- | Simplifies an equality
+-- | Nothing represents triviality (equality always holds)
+simplifyEq :: F.Expr -> F.Expr -> Maybe F.Expr
+simplifyEq = go mempty
+  where
+    go :: S.HashSet (F.Symbol, F.Symbol) -> F.Expr -> F.Expr -> Maybe F.Expr
+    go _ l@(F.ESym s) r@(F.ESym s')
+      | s == s'   = Nothing
+      | otherwise = Just $ F.PAtom F.Eq l r
+    go ss l@(F.EVar x) r@(F.EVar y)
+      | x == y             = Nothing
+      | S.member (x, y) ss = Nothing
+      | otherwise          = Just $ F.PAtom F.Eq l r
+    go ss l@(F.EApp f a) r@(F.EApp g b)
+      = case (go ss f g, go ss a b) of
+          (Nothing, Nothing) -> Nothing
+          _                  -> Just $ F.PAtom F.Eq l r
+    go ss (F.ENeg x) (F.ENeg y) = go ss x y
+    go ss l@(F.EBin o x y) r@(F.EBin o' x' y')
+      | o == o'   = case (go ss x x', go ss y y') of
+          (Nothing, Nothing) -> Nothing
+          _                  -> Just $ F.PAtom F.Eq l r
+      | otherwise = Just $ F.PAtom F.Eq l r
+    go ss l@(F.EIte p il el) r@(F.EIte q ir er)
+      = let (p', il', el') = simplifyIf' p il el
+            (q', ir', er') = simplifyIf' q ir er
+        in case (go ss p' q', go ss il' ir', go ss el' er') of
+              (Nothing, Nothing, Nothing) -> Nothing
+              (Just pr, Nothing, Nothing) -> Just pr
+              (_, _, _)                   -> Just $ F.PAtom F.Eq l r
+    go ss l@(F.ECst e t) r@(F.ECst e' u)
+      | t == u    = go ss e e'
+      | otherwise = Just $ F.PAtom F.Eq l r
+    go ss l@(F.ELam (s, t) e) r@(F.ELam (s', t') e')
+      | t == t'   = go (S.insert (s, s') ss) e e'
+      | otherwise = Just $ F.PAtom F.Eq l r
+    go ss l@(F.ETApp e t) r@(F.ETApp e' u)
+      | t == u    = go ss e e'
+      | otherwise = Just $ F.PAtom F.Eq l r
+    go ss (F.ETAbs e s) (F.ETAbs e' s') = go (S.insert (s, s') ss) e e'
+    go ss (F.PAnd ps) (F.PAnd qs)
+      = let isDup x y = isNothing $ go ss x y
+            ps'       = L.nubBy isDup ps
+            qs'       = L.nubBy isDup qs
+            ps''      = L.deleteFirstsBy (\x y -> isNothing $ go ss x y) ps' qs'
+            qs''      = L.deleteFirstsBy (\x y -> isNothing $ go ss x y) qs' ps'
+         in case (ps'', qs'') of
+              ([], []) -> Nothing
+              _        -> Just $ F.PAtom F.Eq (andMerges ps'') (andMerges qs'')
+    go ss (F.POr ps) (F.POr qs)
+      = let isDup x y = isNothing $ go ss x y
+            ps'       = L.nubBy isDup ps
+            qs'       = L.nubBy isDup qs
+            ps''      = L.deleteFirstsBy (\x y -> isNothing $ go ss x y) ps' qs'
+            qs''      = L.deleteFirstsBy (\x y -> isNothing $ go ss x y) qs' ps'
+         in case (ps', qs') of
+              ([], []) -> Nothing
+              _        -> Just $ F.PAtom F.Eq (orMerges ps'') (orMerges qs'')
+    go ss l@(F.PImp p q) r@(F.PImp p' q')
+      = case (go ss p p', go ss q q') of
+          (Nothing, Nothing) -> Nothing
+          (Nothing, Just u)  -> Just $ F.PImp p u
+          _                  -> Just $ F.PAtom F.Eq l r
+    go ss l@(F.PIff p q) r@(F.PIff p' q')
+      = case (go ss p p', go ss q q') of
+          (Nothing, Nothing) -> Nothing
+          _                  -> Just $ F.PAtom F.Eq l r
+    go _ l@(F.PKVar k s) r@(F.PKVar k' s')
+      | k == k' && s == s' = Nothing
+      | otherwise          = Just $ F.PAtom F.Eq l r
+    go ss l@(F.PAll st e) r@(F.PAll st' e')
+      | st == st' = go ss e e'
+      | otherwise = Just $ F.PAtom F.Eq l r
+    go ss l@(F.PExist st e) r@(F.PExist st' e')
+      | st == st' = go ss e e'
+      | otherwise = Just $ F.PAtom F.Eq l r
+    go ss l@(F.PGrad k s g e) r@(F.PGrad k' s' g' e')
+      | k == k' && s == s' && g == g' = go ss e e'
+      | otherwise                     = Just $ F.PAtom F.Eq l r
+    go ss l@(F.ECoerc t u e) r@(F.ECoerc t' u' e')
+      | t == t' && u == u' = go ss e e'
+      | otherwise          = Just $ F.PAtom F.Eq l r
+    go _ l r = Just $ F.PAtom F.Eq l r
+
+-- P <=> Q
+--   ==
+-- P <=> R
+
+-- P => Q == R
+
 -- | Central NBE function operating on a binding, open term and argument that
 -- | taken together represent the application of a lambda function (useful for quotients).
 normaliseLam
@@ -1970,15 +2280,14 @@ normaliseLam sym ty (F.EBin op e1 e2) arg = do
   return $ F.applyConstantFolding op e1' e2'
 normaliseLam sym ty (F.EIte p ie ee) arg = do
   p'  <- normaliseLam sym ty p arg
-  ie' <- normaliseLam sym ty ie arg
-  ee' <- normaliseLam sym ty ee arg
+
   guardTruth p' >>= \case
-    Just True  -> return ie'
-    Just False -> return ee'
+    Just True  -> normaliseLam sym ty ie arg
+    Just False -> normaliseLam sym ty ee arg
     Nothing    ->
           F.EIte p'
-      <$> withGuard p' (normaliseLam sym ty ie' arg)
-      <*> withGuard (applyNot p') (normaliseLam sym ty ee' arg) 
+      <$> withGuard p' (normaliseLam sym ty ie arg)
+      <*> withGuard (applyNot p') (normaliseLam sym ty ee arg)
 normaliseLam sym ty (F.ELam (sym', ty') e) arg
   | sym == sym' = F.ELam (sym', ty') <$> normaliseLam sym' ty' e (F.EVar sym')
   | otherwise   = do
@@ -2018,8 +2327,8 @@ normaliseLam sym ty (F.PNot e) arg = do
   e' <- normaliseLam sym ty e arg
 
   guardTruth e' >>= \case
-    Just True  -> return F.PTrue
-    Just False -> return F.PFalse
+    Just True  -> return F.PFalse
+    Just False -> return F.PTrue
     Nothing    -> return $ F.PNot e'
 normaliseLam sym ty (F.PImp e1 e2) arg = do
   e1' <- normaliseLam sym ty e1 arg

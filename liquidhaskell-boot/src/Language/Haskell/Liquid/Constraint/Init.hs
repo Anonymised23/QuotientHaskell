@@ -190,6 +190,7 @@ measEnv sp xts cbs _tcb lt1s lt2s asms itys hs info = CGE
   , tgEnv    = Tg.makeTagEnv cbs
   , tgKey    = Nothing
   , trec     = Nothing
+  , binders  = S.empty
   , lcb      = M.empty
   , forallcb = M.empty
   , holes    = fromListHEnv hs

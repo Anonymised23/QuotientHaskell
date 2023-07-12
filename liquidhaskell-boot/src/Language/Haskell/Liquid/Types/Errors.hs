@@ -89,6 +89,7 @@ import           Liquid.GHC.API as Ghc hiding ( Expr
                                                                )
 import           Language.Fixpoint.Types      (pprint, showpp, Tidy (..), PPrint (..), Symbol, Expr, SubcId)
 import qualified Language.Fixpoint.Misc       as Misc
+import qualified Language.Fixpoint.Types.Names as F
 import qualified Language.Haskell.Liquid.Misc     as Misc
 import           Language.Haskell.Liquid.Misc ((<->))
 import           Language.Haskell.Liquid.Types.Generics
@@ -192,14 +193,16 @@ data Oblig
   = OTerm -- ^ Obligation that proves termination
   | OInv  -- ^ Obligation that proves invariants
   | OCons -- ^ Obligation that proves subtyping constraints
+  | OQuot F.LocSymbol -- ^ Quotient respectfulness
   deriving (Eq, Generic, Data, Typeable)
   deriving Hashable via Generically Oblig
 
 instance B.Binary Oblig
 instance Show Oblig where
-  show OTerm = "termination-condition"
-  show OInv  = "invariant-obligation"
-  show OCons = "constraint-obligation"
+  show OTerm     = "termination-condition"
+  show OInv      = "invariant-obligation"
+  show OCons     = "constraint-obligation"
+  show (OQuot _) = "quotient-respectfulness"
 
 instance NFData Oblig
 
@@ -207,9 +210,10 @@ instance PPrint Oblig where
   pprintTidy _ = ppOblig
 
 ppOblig :: Oblig -> Doc
-ppOblig OCons = text "Constraint Check"
-ppOblig OTerm = text "Termination Check"
-ppOblig OInv  = text "Invariant Check"
+ppOblig OCons     = text "Constraint Check"
+ppOblig OTerm     = text "Termination Check"
+ppOblig OInv      = text "Invariant Check"
+ppOblig (OQuot q) = text "Quotient Check for" <+> pprint q
 
 --------------------------------------------------------------------------------
 -- | Generic Type for Error Messages -------------------------------------------
@@ -494,6 +498,10 @@ data TError t =
                , qname  :: !Doc
                , recPos :: SrcSpan
                , tyDoc  :: !Doc
+               }
+
+  | ErrQuotSub { pos    :: SrcSpan
+               , dc     :: !Doc
                }
 
   | ErrOther    { pos   :: SrcSpan
@@ -1094,6 +1102,12 @@ ppError' _ dCtx (ErrQuotWF pos qname doc)
       $+$ dCtx
       $+$ nest 4 doc
       $+$ nest 4 ("Defined at: " <+> pprint pos)
+
+ppError' _ dCtx (ErrQuotSub pos doc)
+  = text "Quotient subtyping error: "
+      $+$ dCtx
+      $+$ nest 4 doc
+      $+$ nest 4 ("Type error at: " <+> pprint pos)
 
 ppError' _ dCtx (ErrRecQuot pos qname rpos tdoc)
   = text "The quotient type"

@@ -24,7 +24,7 @@ import           Liquid.GHC.API as Ghc hiding (panic, showPpr)
 addC :: SubC -> String -> CG ()
 ---- ----------------------------------------------------------------------------
 addC c@(SubC γ t1 t2) _msg
-  | toType False (elimQuotTyCons t1) /= toType False (elimQuotTyCons t2)
+  | toType False t1 /= toType False t2
   = panic (Just $ getLocation γ) $ "addC: malformed constraint:\n" ++ _msg ++ showpp t1 ++ "\n <: \n" ++ showpp t2
   | otherwise
   = modify $ \s -> s { hsCs  = c : hsCs s }
