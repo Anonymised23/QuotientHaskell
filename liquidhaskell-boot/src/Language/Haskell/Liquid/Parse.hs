@@ -1566,7 +1566,7 @@ quotPatternP
       -- <|> (upperIdP >>= \x -> (QPRec x <$> recPat) <|> return (QPCons x []))
       <|> (QPLit <$> constantP)
       <|> (QPVar <$> lowerIdP)
-      <|> (upperIdP >>= consPat)
+      <|> (flip QPCons [] <$> upperIdP)
 
     tupPat :: Parser QPattern
     tupPat = do
