@@ -75,8 +75,8 @@ splitW (WfC γ (RAllP _ r))
 splitW (WfC γ t@(RVar _ _))
   = bsplitW γ t
 
-splitW (WfC γ (RApp (RQTyCon _ ut _ vs _) ts _ _))
-  = splitW (WfC γ (appQuotTyCon ut vs ts))
+{-splitW (WfC γ (RApp (RQTyCon _ ut _ vs _) ts _ _))
+  = splitW (WfC γ (appQuotTyCon ut vs ts))-}
 
 splitW (WfC γ t@(RApp _ ts rs _))
   =  do ws    <- bsplitW γ t

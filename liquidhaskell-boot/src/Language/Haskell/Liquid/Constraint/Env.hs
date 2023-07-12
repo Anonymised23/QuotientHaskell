@@ -48,6 +48,7 @@ module Language.Haskell.Liquid.Constraint.Env (
  , removeFreeBinder
  , removeFreeBinders
 
+ , setIsCheckDataConApp
 ) where
 
 
@@ -263,6 +264,8 @@ addEEnv γ (x,t')= do
   modify (\s -> s { ebinds = ebinds s ++ (snd <$> is)})
   return $ γ' { fenv = insertsFEnv (fenv γ) is }
 
+setIsCheckDataConApp :: Bool -> CGEnv -> CGEnv
+setIsCheckDataConApp b γ = γ { isCheckDataConApp = b }
 
 (+++=) :: (CGEnv, String) -> (F.Symbol, CoreExpr, SpecType) -> CG CGEnv
 (γ, _) +++= (x, e, t) = (γ {lcb = M.insert x e (lcb γ) }) += ("+++=", x, t)

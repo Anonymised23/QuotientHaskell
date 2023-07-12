@@ -110,6 +110,7 @@ data CGEnv = CGE
   , cerr   :: !(Maybe (TError SpecType))             -- ^ error that should be reported at the user
   , cgInfo :: !TargetInfo                            -- ^ top-level TargetInfo
   , cgVar  :: !(Maybe Var)                           -- ^ top level function being checked
+  , isCheckDataConApp :: !Bool                       -- ^ Whether the current check is for application of a data constructor (for quotient types)
   } -- deriving (Data, Typeable)
 
 instance HasConfig CGEnv where
@@ -437,7 +438,7 @@ instance NFData RInv where
   rnf (RInv x y z) = rnf x `seq` rnf y `seq` rnf z
 
 instance NFData CGEnv where
-  rnf (CGE x1 _ x3 _ x4 x5 _ _ x55 x6 x7 x8 x9 _ _ _ x10 _ _ _ _ _ _ _ _ _ _ _)
+  rnf (CGE x1 _ x3 _ x4 x5 _ _ x55 x6 x7 x8 x9 _ _ _ x10 _ _ _ _ _ _ _ _ _ _ _ _)
     = x1 `seq` {- rnf x2 `seq` -} seq x3
          `seq` rnf x5
          `seq` rnf x55

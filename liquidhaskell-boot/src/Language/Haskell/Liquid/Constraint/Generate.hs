@@ -739,7 +739,15 @@ cconsE' γ e (RApp (RQTyCon _ ut _ tvs _) ts _ _)
 cconsE' γ e t
   = do  te  <- consE γ e
         te' <- instantiatePreds γ e te >>= addPost γ
-        addC (SubC γ te' t) ("cconsE: " ++ "\n t = " ++ showpp t ++ "\n te = " ++ showpp te ++ GM.showPpr e)
+
+        let sub
+              = if isCheckDataConApp γ then case te' of
+                  RApp (RQTyCon _ ut _ vs _) ts _ _ -> SubC γ (appQuotTyCon ut vs ts) t
+                  _ -> SubC γ te' t
+                else
+                  SubC γ te' t
+
+        addC sub ("cconsE: " ++ "\n t = " ++ showpp t ++ "\n te = " ++ showpp te ++ GM.showPpr e)
 
 lambdaSingleton :: CGEnv -> F.TCEmb TyCon -> Var -> CoreExpr -> CG (UReft F.Reft)
 lambdaSingleton γ tce x e
@@ -863,7 +871,7 @@ consE _ (Lit c)
   = refreshVV $ uRType $ literalFRefType c
 
 consE γ e'@(App e a@(Type τ))
-  = do RAllT α te _ <- checkAll ("Non-all TyApp with expr", e) γ <$> consE γ e
+  = do RAllT α te _ <- checkAll ("Non-all TyApp with expr", e) γ <$> consE (setIsCheckDataConApp False γ) e
        t            <- if not (nopolyinfer (getConfig γ)) && isPos α && isGenericVar (ty_var_value α) te
                          then freshTyType (typeclass (getConfig γ)) TypeInstE e τ
                          else trueTy (typeclass (getConfig γ)) τ
@@ -872,7 +880,7 @@ consE γ e'@(App e a@(Type τ))
        tt0          <- instantiatePreds γ e' (subsTyVarMeet' (ty_var_value α, t') te)
        let tt        = makeSingleton γ (simplify e') $ subsTyReft γ (ty_var_value α) τ tt0
        case rTVarToBind α of
-         Just (x, _) -> return $ maybe (checkUnbound γ e' x tt a) (F.subst1 tt . (x,)) (argType τ)
+         Just (x, _) -> return $ maybe (checkUnbound (setIsCheckDataConApp False γ) e' x tt a) (F.subst1 tt . (x,)) (argType τ)
          Nothing     -> return tt
   where
     isPos α = not (extensionality (getConfig γ)) || rtv_is_pol (ty_var_info α)
@@ -887,7 +895,7 @@ consE γ e'@(App e a) | Just aDict <- getExprDict γ a
         te''         <- dropConstraints γ te'''
         updateLocA {- πs -}  (exprLoc e) te''
         let RFun x _ tx t _ = checkFun ("Non-fun App with caller ", e') γ te''
-        cconsE γ' a tx
+        cconsE (setIsCheckDataConApp False γ') a tx
         addPost γ'        $ maybe (checkUnbound γ' e' x t a) (F.subst1 t . (x,)) (argExpr γ a)
 
 consE γ e'@(App e a)
@@ -897,18 +905,21 @@ consE γ e'@(App e a)
        te3        <- dropConstraints γ te2
        updateLocA (exprLoc e) te3
        let RFun x _ tx t _ = checkFun ("Non-fun App with caller ", e') γ te3
-       cconsE γ' a tx
+
+       isDC <- isDCApp e
+
+       cconsE (setIsCheckDataConApp isDC γ') a tx
        makeSingleton γ' (simplify e') <$> addPost γ' (maybe (checkUnbound γ' e' x t a) (F.subst1 t . (x,)) (argExpr γ $ simplify a))
 
 consE γ (Lam α e) | isTyVar α
   = do γ' <- updateEnvironment γ α
-       t' <- consE γ' e
+       t' <- consE (setIsCheckDataConApp False γ') e
        return $ RAllT (makeRTVar $ rTyVar α) t' mempty
 
 consE γ  e@(Lam x e1)
   = do tx      <- freshTyType (typeclass (getConfig γ)) LamE (Var x) τx
        γ'      <- γ += ("consE", F.symbol x, tx)
-       t1      <- consE γ' e1
+       t1      <- consE (setIsCheckDataConApp False γ') e1
        addIdA x $ AnnDef tx
        addW     $ WfC γ tx
        tce     <- gets tyConEmbed
@@ -918,17 +929,17 @@ consE γ  e@(Lam x e1)
       FunTy { ft_arg = τx } = exprType e
 
 consE γ e@(Let _ _)
-  = cconsFreshE LetE γ e
+  = cconsFreshE LetE (setIsCheckDataConApp False γ) e
 
 consE γ e@(Case _ _ _ [_])
   | Just p@Rs.PatProject{} <- Rs.lift e
-  = consPattern γ p (exprType e)
+  = consPattern (setIsCheckDataConApp False γ) p (exprType e)
 
 consE γ e@(Case _ _ _ cs)
-  = cconsFreshE (caseKVKind cs) γ e
+  = cconsFreshE (caseKVKind cs) (setIsCheckDataConApp False γ) e
 
 consE γ (Tick tt e)
-  = do t <- consE (setLocation γ (Sp.Tick tt)) e
+  = do t <- consE (setLocation (setIsCheckDataConApp False γ) (Sp.Tick tt)) e
        addLocA Nothing (GM.tickSrcSpan tt) (AnnUse t)
        return t
 
@@ -945,6 +956,11 @@ consE γ e@(Coercion _)
 
 consE _ e@(Type t)
   = panic Nothing $ "consE cannot handle type " ++ GM.showPpr (e, t)
+
+isDCApp :: CoreExpr -> CG Bool
+isDCApp (App e _) = isDCApp e
+isDCApp (Var v)   = gets (L.elem v . map fst . dataConTys)
+isDCApp _         = return False
 
 caseKVKind ::[Alt Var] -> KVKind
 caseKVKind [Alt (DataAlt _) _ (Var _)] = ProjectE

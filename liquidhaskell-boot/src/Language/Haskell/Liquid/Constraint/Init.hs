@@ -198,6 +198,7 @@ measEnv sp xts cbs _tcb lt1s lt2s asms itys hs info = CGE
   , cerr     = Nothing
   , cgInfo   = info
   , cgVar    = Nothing
+  , isCheckDataConApp = False
   }
   where
       tce         = gsTcEmbeds (gsName sp)
